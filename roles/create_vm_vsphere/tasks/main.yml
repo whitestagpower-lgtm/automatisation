@@ -1,0 +1,59 @@
+---
+- name: Préparer les données VM
+  set_fact:
+    prepared_vms: "{{ valid_vms | map('combine', {
+      'template': 'TMP' + item.os,
+      'dc': subzone_map[item['sous-zone']].datacenter,
+      'cluster': subzone_map[item['sous-zone']].cluster,
+      'datastore': subzone_map[item['sous-zone']].datastore
+    }) | list }}"
+  loop: "{{ valid_vms }}"
+  loop_control:
+    loop_var: item
+
+- name: Déployer VMs
+  loop: "{{ prepared_vms }}"
+  vars:
+    vm: "{{ item }}"
+  vmware_guest:
+    hostname: "{{ vsphere_hostname }}"
+    username: "{{ vsphere_username }}"
+    password: "{{ vsphere_password }}"
+    validate_certs: "{{ vsphere_validate_certs }}"
+    name: "{{ vm.Nom }}"
+    datacenter: "{{ vm.dc }}"
+    cluster: "{{ vm.cluster }}"
+    datastore: "{{ vm.datastore }}"
+    template: "{{ vm.template }}"
+    networks:
+      - name: "{{ vm.nic1_vlan }}"
+        ip: "{{ vm.nic1_ip }}"
+        netmask: "{{ vm.nic1_netmask }}"
+        gateway: "{{ vm.nic1_gateway }}"
+      {% if vm.nic2_vlan != 'non' %}
+      - name: "{{ vm.nic2_vlan }}"
+        ip: "{{ vm.nic2_ip }}"
+        netmask: "{{ vm.nic2_netmask }}"
+        gateway: "{{ vm.nic2_gateway }}"
+      {% endif %}
+    disk:
+      - size_gb: 40
+      {% if vm.disk2 != 'non' %}
+      - size_gb: "{{ vm.disk2 }}"
+      {% endif %}
+    hardware:
+      memory_mb: 4096
+      num_cpus: 2
+
+- name: Générer inventaire dynamique
+  copy:
+    content: |
+      [deployed]
+      {% for vm in prepared_vms %}
+      {{ vm.Nom }} ansible_host={{ vm.nic1_ip }}
+      {% endfor %}
+    dest: "/automatisation/inventory/inventaire_deploiement_{{ lookup('pipe','date +%Y%m%d%H%M%S') }}"
+  register: inventory_file
+
+- set_fact:
+    inventory_for_packages: "{{ inventory_file.dest }}"

@@ -1,0 +1,12 @@
+---
+vsphere_validate_certs: false
+
+subzone_map:
+  SUB1:
+    datacenter: PARIS_DC
+    cluster: PARIS_CLUSTER
+    datastore: PARIS_DS
+  SUB2:
+    datacenter: LYON_DC
+    cluster: LYON_CLUSTER
+    datastore: LYON_DS

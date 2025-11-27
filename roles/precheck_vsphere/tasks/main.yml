@@ -1,0 +1,49 @@
+---
+- name: Lire CSV
+  read_csv:
+    path: "{{ csv_file }}"
+  register: vm_csv
+
+- set_fact:
+    valid_vms: []
+    invalid_vms: []
+
+- name: Boucle de précheck
+  loop: "{{ vm_csv.list }}"
+  vars:
+    row: "{{ item }}"
+  block:
+
+    - name: Vérifier si VM existe
+      vmware_guest_find:
+        hostname: "{{ vsphere_hostname }}"
+        username: "{{ vsphere_username }}"
+        password: "{{ vsphere_password }}"
+        validate_certs: "{{ vsphere_validate_certs }}"
+        name: "{{ row.Nom }}"
+      register: vm_exists
+      ignore_errors: true
+
+    - name: Vérifier ping IP
+      command: "ping -c1 {{ row.nic1_ip }}"
+      register: ping_test
+      ignore_errors: true
+
+    - name: Vérifier VLAN
+      set_fact:
+        vlan_ok: "{{ row.nic1_vlan in vlan_list }}"
+
+    - name: Décider validité
+      set_fact:
+        valid_vms: "{{ valid_vms + [row] }}"  
+      when: vm_exists.failed and ping_test.failed and vlan_ok
+
+    - name: Marquer invalide
+      set_fact:
+        invalid_vms: "{{ invalid_vms + [row] }}"
+      when: not (vm_exists.failed and ping_test.failed and vlan_ok)
+
+- name: Stop si aucune VM valide
+  fail:
+    msg: "Aucune VM n’est valide pour le déploiement."
+  when: valid_vms | length == 0

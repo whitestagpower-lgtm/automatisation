@@ -1,0 +1,10 @@
+---
+vsphere_hostname: "vcenter.local"
+vsphere_username: "administrator@vsphere.local"
+vsphere_password: "password"
+vsphere_validate_certs: false
+
+vlan_list:
+  - VLAN10
+  - VLAN20
+  - VLAN30

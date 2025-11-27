@@ -1,0 +1,11 @@
+---
+- name: Pipeline complet : precheck + deploy + post-install
+  hosts: localhost
+  gather_facts: no
+  vars:
+    csv_file: "/automatisation/vm_list.csv"
+
+  roles:
+    - precheck_vsphere
+    - create_vm_vsphere
+    - install_packages

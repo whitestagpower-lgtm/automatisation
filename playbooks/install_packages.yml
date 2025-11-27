@@ -1,0 +1,6 @@
+---
+- name: Installation de packages sur les VMs déployées
+  hosts: deployed
+  gather_facts: yes
+  roles:
+    - install_packages

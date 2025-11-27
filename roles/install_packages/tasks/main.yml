@@ -1,0 +1,6 @@
+---
+- name: Installer packages
+  yum:
+    name: "{{ packages_list }}"
+    state: present
+  become: yes
