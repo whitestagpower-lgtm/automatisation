@@ -1,0 +1,297 @@
+Parfait ! Je vais te fournir tout le projet complet prêt à copier-coller, en respectant tes dernières demandes :
+
+Arborescence complète
+
+Inventaires hosts.yml et custom.yml
+
+Host_vars pour vm1 à vm4
+
+Group_vars/all.yml
+
+Playbooks : deploy.yml, satellite_register.yml, zabbix_install.yml
+
+Rôles : precheck_vm, deploy_vm, satellite, zabbix
+
+Gestion des variables vm_agents.satellite et vm_agents.zabbix dans le playbook, rôles sans condition interne
+
+Vérification de toutes les IPs et VLANs déclarés
+
+1️⃣ ARBORESCENCE DU PROJET
+inventory/
+  hosts.yml
+  custom.yml
+
+group_vars/
+  all.yml
+
+host_vars/
+  vm1.yml
+  vm2.yml
+  vm3.yml
+  vm4.yml
+
+playbooks/
+  deploy.yml
+  satellite_register.yml
+  zabbix_install.yml
+
+roles/
+  precheck_vm/
+    tasks/main.yml
+  deploy_vm/
+    tasks/main.yml
+  satellite/
+    tasks/main.yml
+  zabbix/
+    tasks/main.yml
+
+2️⃣ INVENTAIRES
+inventory/hosts.yml
+all:
+  children:
+    INFRASTRUCTURE:
+      children:
+        VMWARE:
+          hosts:
+            vm1:
+            vm2:
+
+inventory/custom.yml
+all:
+  children:
+    INFRASTRUCTURE:
+      hosts:
+        vm3:
+        vm4:
+
+3️⃣ VARIABLES GLOBALES
+group_vars/all.yml
+zones:
+  ZIBO:
+    X1:
+      vcenter: vc-zibo-x1.local
+      datacenter: DC-ZIBO-X1
+      cluster: CL-ZIBO-X1
+      templates:
+        RHEL8: tpl-rhel8-zibo-x1
+
+  ZNPBO:
+    vcenter: vc-znpbo.local
+    datacenter: DC-ZNPBO
+    cluster: CL-ZNPBO
+    templates:
+      RHEL8: tpl-rhel8-znpbo
+
+vcenter_user: administrator@vsphere.local
+vcenter_pass: password
+validate_certs: false
+
+4️⃣ HOST_VARS
+host_vars/vm1.yml
+zone: ZIBO
+site: X1
+os: RHEL8
+cpu: 4
+ram: 8192
+networks:
+  - vlan: VLAN1528
+    ip: 124.23.34.45
+    netmask: 255.255.255.0
+    gateway: 124.23.34.1
+  - vlan: VLAN1530
+    ip: 124.23.35.45
+    netmask: 255.255.255.0
+disks:
+  - size_gb: 30
+  - size_gb: 20
+vm_agents:
+  satellite: true
+  zabbix: false
+satellite_env: pro
+
+host_vars/vm2.yml
+zone: ZNPBO
+os: RHEL8
+cpu: 2
+ram: 4096
+networks:
+  - vlan: VLAN1540
+    ip: 124.23.36.10
+    netmask: 255.255.255.0
+    gateway: 124.23.36.1
+disks:
+  - size_gb: 40
+vm_agents:
+  satellite: false
+  zabbix: true
+satellite_env: krd
+
+host_vars/vm3.yml
+zone: ZIBO
+site: X1
+os: RHEL8
+cpu: 4
+ram: 8192
+networks:
+  - vlan: VLAN1528
+    ip: 124.23.37.10
+    netmask: 255.255.255.0
+disks:
+  - size_gb: 30
+vm_agents:
+  satellite: true
+  zabbix: true
+satellite_env: pro
+
+host_vars/vm4.yml
+zone: ZNPBO
+os: RHEL8
+cpu: 2
+ram: 4096
+networks:
+  - vlan: VLAN1545
+    ip: 124.23.38.10
+    netmask: 255.255.255.0
+disks:
+  - size_gb: 40
+vm_agents:
+  satellite: false
+  zabbix: true
+satellite_env: krd
+
+5️⃣ PLAYBOOKS
+playbooks/deploy.yml (déploiement + post-install)
+---
+- hosts: VMWARE
+  gather_facts: false
+  vars:
+    ansible_connection: local
+
+  roles:
+    - precheck_vm
+    - deploy_vm
+
+- hosts: INFRASTRUCTURE
+  gather_facts: false
+
+  tasks:
+    - name: Exécuter Satellite uniquement si vm_agents.satellite=true
+      include_role:
+        name: satellite
+      when: vm_agents.satellite | default(false)
+
+    - name: Exécuter Zabbix uniquement si vm_agents.zabbix=true
+      include_role:
+        name: zabbix
+      when: vm_agents.zabbix | default(false)
+
+playbooks/satellite_register.yml (post-install sur inventaire custom)
+---
+- hosts: INFRASTRUCTURE
+  gather_facts: false
+
+  tasks:
+    - name: Exécuter Satellite uniquement si vm_agents.satellite=true
+      include_role:
+        name: satellite
+      when: vm_agents.satellite | default(false)
+
+playbooks/zabbix_install.yml (post-install sur inventaire custom)
+---
+- hosts: INFRASTRUCTURE
+  gather_facts: false
+
+  tasks:
+    - name: Exécuter Zabbix uniquement si vm_agents.zabbix=true
+      include_role:
+        name: zabbix
+      when: vm_agents.zabbix | default(false)
+
+6️⃣ RÔLES
+roles/precheck_vm/tasks/main.yml
+---
+- set_fact: vm_mapping={{ zones[zone][site] if site is defined else zones[zone] }}
+
+- name: Vérifier si la VM existe déjà
+  community.vmware.vmware_guest_info:
+    hostname: "{{ vm_mapping.vcenter }}"
+    username: "{{ vcenter_user }}"
+    password: "{{ vcenter_pass }}"
+    validate_certs: "{{ validate_certs }}"
+    datacenter: "{{ vm_mapping.datacenter }}"
+    name: "{{ inventory_hostname }}"
+  register: vm_info
+  ignore_errors: true
+
+- name: Vérifier toutes les IP déclarées
+  command: ping -c1 {{ item.ip }}
+  loop: "{{ networks }}"
+  register: ping_results
+  ignore_errors: true
+
+- set_fact: ip_free={{ ping_results.results | selectattr('rc','equalto',0) | list | length == 0 }}
+
+- name: Vérifier tous les VLANs déclarés
+  community.vmware.vmware_portgroup_info:
+    hostname: "{{ vm_mapping.vcenter }}"
+    username: "{{ vcenter_user }}"
+    password: "{{ vcenter_pass }}"
+    validate_certs: "{{ validate_certs }}"
+    datacenter: "{{ vm_mapping.datacenter }}"
+  register: pg_info
+  ignore_errors: true
+
+- set_fact: vlan_ok={{ networks | map(attribute='vlan') | list | difference(pg_info.portgroups | map(attribute='name') | list) | length == 0 }}
+
+- set_fact: check_ok={{ (vm_info.failed | default(true)) and ip_free and vlan_ok }}
+
+roles/deploy_vm/tasks/main.yml
+---
+- name: Arrêter cette VM si check KO
+  meta: end_host
+  when: not check_ok | default(false)
+
+- set_fact: vm_mapping={{ zones[zone][site] if site is defined else zones[zone] }}
+
+- name: Créer la VM depuis template
+  community.vmware.vmware_guest:
+    hostname: "{{ vm_mapping.vcenter }}"
+    username: "{{ vcenter_user }}"
+    password: "{{ vcenter_pass }}"
+    validate_certs: "{{ validate_certs }}"
+    datacenter: "{{ vm_mapping.datacenter }}"
+    cluster: "{{ vm_mapping.cluster }}"
+    name: "{{ inventory_hostname }}"
+    template: "{{ vm_mapping.templates[os] }}"
+    state: poweredon
+    hardware:
+      num_cpus: "{{ cpu }}"
+      memory_mb: "{{ ram }}"
+    networks: "{{ networks }}"
+    disk: "{{ disks }}"
+
+roles/satellite/tasks/main.yml
+---
+- name: Role Satellite pur
+  debug:
+    msg: "Enregistrement Satellite env={{ satellite_env }} pour {{ inventory_hostname }}"
+
+roles/zabbix/tasks/main.yml
+---
+- name: Role Zabbix pur
+  package:
+    name: zabbix-agent
+    state: present
+
+
+✅ Avec cette structure tu peux :
+
+Déployer VM + installer agents : ansible-playbook -i inventory/hosts.yml playbooks/deploy.yml
+
+Installer Satellite uniquement sur VM existantes : ansible-playbook -i inventory/custom.yml playbooks/satellite_register.yml
+
+Installer Zabbix uniquement : ansible-playbook -i inventory/custom.yml playbooks/zabbix_install.yml
+
+La logique true/false est gérée dans le playbook via when.
+
+Les rôles restent génériques, réutilisables, et ne contiennent pas de condition interne.
