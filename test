@@ -1,0 +1,156 @@
+---
+
+- name: Vérifier connectivité proxy1 (192.168.120.154:1080)
+  shell: nc -zv 192.168.120.154 1080
+  register: proxy1_check
+  ignore_errors: yes
+
+- name: Vérifier connectivité proxy2 (192.168.116.154:1080)
+  shell: nc -zv 192.168.116.154 1080
+  register: proxy2_check
+  ignore_errors: yes
+
+
+- name: Récupérer la gateway par défaut
+  shell: ip route | grep default | awk '{print $3}'
+  register: default_gw
+  changed_when: false
+
+- name: Récupérer l'interface réseau par défaut
+  shell: ip route | grep default | awk '{print $5}'
+  register: default_iface
+  changed_when: false
+
+- name: Récupérer la version majeure de RHEL
+  shell: rpm -E %{rhel}
+  register: rhel_version
+  changed_when: false
+
+
+- name: Ajouter route permanente proxy1 (RHEL7)
+  lineinfile:
+    path: /etc/sysconfig/network-scripts/route-{{ default_iface.stdout }}
+    line: "192.168.120.154/32 via {{ default_gw.stdout }}"
+    create: yes
+  when:
+    - proxy1_check.rc != 0
+    - rhel_version.stdout == "7"
+  ignore_errors: yes
+
+- name: Ajouter route permanente proxy2 (RHEL7)
+  lineinfile:
+    path: /etc/sysconfig/network-scripts/route-{{ default_iface.stdout }}
+    line: "192.168.116.154/32 via {{ default_gw.stdout }}"
+    create: yes
+  when:
+    - proxy2_check.rc != 0
+    - rhel_version.stdout == "7"
+  ignore_errors: yes
+
+- name: Ajouter route permanente proxy1 (RHEL8/9)
+  shell: nmcli connection modify {{ default_iface.stdout }} +ipv4.routes "192.168.120.154/32 {{ default_gw.stdout }}"
+  when:
+    - proxy1_check.rc != 0
+    - rhel_version.stdout is version('8', '>=')
+  ignore_errors: yes
+
+- name: Ajouter route permanente proxy2 (RHEL8/9)
+  shell: nmcli connection modify {{ default_iface.stdout }} +ipv4.routes "192.168.116.154/32 {{ default_gw.stdout }}"
+  when:
+    - proxy2_check.rc != 0
+    - rhel_version.stdout is version('8', '>=')
+  ignore_errors: yes
+
+- name: Redémarrer la connexion réseau pour appliquer les routes (RHEL8/9)
+  shell: nmcli connection up {{ default_iface.stdout }}
+  when: rhel_version.stdout is version('8', '>=')
+  ignore_errors: yes
+
+
+- name: Ajouter route temporaire proxy1
+  shell: ip route add 192.168.120.154/32 via {{ default_gw.stdout }}
+  when: proxy1_check.rc != 0
+  ignore_errors: yes
+
+- name: Ajouter route temporaire proxy2
+  shell: ip route add 192.168.116.154/32 via {{ default_gw.stdout }}
+  when: proxy2_check.rc != 0
+  ignore_errors: yes
+
+
+- name: Re-tester connectivité proxy1
+  shell: nc -zv 192.168.120.154 1080
+  register: proxy1_retest
+  ignore_errors: yes
+
+- name: Re-tester connectivité proxy2
+  shell: nc -zv 192.168.116.154 1080
+  register: proxy2_retest
+  ignore_errors: yes
+
+- name: Résumé des flux après ajout de routes
+  debug:
+    msg:
+      - "Proxy1 (192.168.120.154:1080) : {{ 'OK' if proxy1_retest.rc == 0 else 'ÉCHEC' }}"
+      - "Proxy2 (192.168.116.154:1080) : {{ 'OK' if proxy2_retest.rc == 0 else 'ÉCHEC' }}"
+
+
+- name: Copier le package Qualys Cloud Agent
+  copy:
+     src: QualysCloudAgent.rpm
+     dest: /tmp/QualysCloudAgent.rpm
+
+- name: Installer le package Qualys Cloud Agent
+  yum:
+    name: /tmp/QualysCloudAgent.rpm
+    state: latest
+    disable_gpg_check: true
+
+- name: Activer Qualys Cloud Agent
+  shell: /usr/local/qualys/cloud-agent/bin/qualys-cloud-agent.sh ActivationId=062ab7e3-207b-4220-b647-672e8bc5c9a4 CustomerId=b546b3cb-dba2-53eb-e040-18ac09046184 ServerUri=https://qagpublic.qg1.apps.qualys.eu/CloudAgent/
+
+- name: Configurer Qualys Cloud Agent (partie 1)
+  copy:
+    src: qualys-cloud-agent
+    dest: /etc/sysconfig/qualys-cloud-agent
+    owner: root
+    group: root
+    mode: '755'
+
+- name: Configurer Qualys Cloud Agent (partie 2)
+  lineinfile:
+    dest: /etc/environment
+    line: 'qualys_https_proxy="https://192.168.120.154:1080;https://192.168.116.154:1080"'
+    insertbefore: BOF
+
+- name: Activer le service Qualys Cloud Agent
+  service:
+    name: qualys-cloud-agent
+    enabled: yes
+
+- name: Démarrer ou redémarrer le service Qualys Cloud Agent
+  service:
+    name: qualys-cloud-agent
+    state: restarted
+
+- name: Récupérer l'adresse IP du serveur
+  shell: hostname -I | awk '{print $1}'
+  register: host_ip
+  changed_when: false
+
+- name: Vérifier si le service Qualys est actif
+  shell: systemctl is-active qualys-cloud-agent
+  register: qualys_service_status
+  changed_when: false
+  ignore_errors: yes
+
+- name: Résumé final du déploiement Qualys
+  ansible.builtin.debug:
+    msg:
+      - "===================== RÉSUMÉ QUALYS ====================="
+      - "Hôte              : {{ inventory_hostname }}"
+      - "Adresse IP        : {{ host_ip.stdout | default('Inconnue') }}"
+      - "Flux Proxy1 (192.168.120.154:1080) : {{ 'OK' if proxy1_retest.rc == 0 else 'ÉCHEC' }}"
+      - "Flux Proxy2 (192.168.116.154:1080) : {{ 'OK' if proxy2_retest.rc == 0 else 'ÉCHEC' }}"
+      - "Installation Qualys : {{ 'OK' if qualys_service_status.stdout == 'active' else 'ÉCHEC' }}"
+      - "=========================================================="
